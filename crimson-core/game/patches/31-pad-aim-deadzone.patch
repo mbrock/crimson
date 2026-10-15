@@ -1,0 +1,20 @@
+Original bug 31: a resting pad aim stick swings the aim onto the player, and a drifting one twitches it, since pad aim
+has no deadzone. The fix keeps the aim's last direction, 60 units out, inside stick radius 0.2, as the Python port's
+local input and the client's recorded runs do (host/session.inc live_input). Recorded runs aim from their recording
+(seams/pad-aim.patch), so this reaches only the runs the original plays.
+--- a/decomp/1.9/crimsonland/gameplay/player_update_heading.cpp
++++ b/decomp/1.9/crimsonland/gameplay/player_update_heading.cpp
+@@ -1049,6 +1049,13 @@
+             D3DXVec2Normalize(&pad, &pad);
+             float distance = aim_length * cv_padAimDistMul->value + 42.0f;
+             *(vec2_t *)&player->aim = pad * distance + *(vec2_t *)&player->position;
++            if (!portable_preserve_bugs && length <= 0.2f) {
++                float radians = player->aim_heading - 1.5707964f;
++                vec2_t rest;
++                rest.x = cosf(radians) * 60.0f;
++                rest.y = sinf(radians) * 60.0f;
++                *(vec2_t *)&player->aim = rest + *(vec2_t *)&player->position;
++            }
+             }
+             player->aim_heading =
+                 VEC2_Angle(

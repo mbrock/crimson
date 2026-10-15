@@ -1,0 +1,15 @@
+While the pad navigates the menus' focus (game/pad.cpp), the sticks stop steering the original's analog menu cursor,
+which would otherwise drift under the focus the stick moves; the Python port has no analog cursor. Moving the mouse
+returns to the original's.
+--- a/decomp/1.9/crimsonland/game/game_frame_update.cpp
++++ b/decomp/1.9/crimsonland/game/game_frame_update.cpp
+@@ -12,2 +12,3 @@
+ extern "C" {
++extern unsigned char game_pad_navigating;
+ extern player_state_t player_state_table[];
+@@ -330,3 +331,4 @@
+     if (game_state_id != GAME_STATE_GAMEPLAY
+-        && ui_analog_cursor_active == 1) {
++        && ui_analog_cursor_active == 1
++        && !game_pad_navigating) {
+         float cursor_scale = config_blob.mouse_sensitivity * frame_dt;

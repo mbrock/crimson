@@ -57,6 +57,8 @@ extern "C" void game_live_focus_lost(void);
 
 static bool quit_posted;
 
+extern "C" void game_pad_profile(), game_pad_menu(); // game/pad.cpp
+
 #define GAME_EXPORT(name) extern "C" __attribute__((export_name(#name)))
 
 // One pass of Grim's run loop; false once the game has quit.
@@ -68,6 +70,7 @@ GAME_EXPORT(game_frame) int game_frame() {
   if (!grim_dc_mode_active)
     grim_timing_update();
   if (!grim_paused_flag && !grim_dc_mode_active && grim_device_ready && !grim_timing_frozen) {
+    game_pad_menu();
     if (grim_keyboard_enabled) {
       grim_keyboard_poll();
       for (int i = 0; i < 256; ++i) {
@@ -78,6 +81,7 @@ GAME_EXPORT(game_frame) int game_frame() {
     }
     grim_joystick_poll();
     grim_joystick_state_ptr = &grim_joystick_state;
+    game_pad_profile();
     if (!grim_input_cached) {
       grim_mouse_x_cached = grim_mouse_x;
       grim_mouse_y_cached = grim_mouse_y;

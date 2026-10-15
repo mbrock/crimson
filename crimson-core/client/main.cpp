@@ -683,13 +683,17 @@ void fetch_assets() {
 #endif
 
 SDL_AppResult SDL_AppInit(void **, int argc, char **argv) {
-  bool directory_given = false;
+  bool directory_given = false, fullscreen = false;
   for (int i = 1; i < argc; ++i) {
 #ifndef __EMSCRIPTEN__
+    if (!strcmp(argv[i], "--fullscreen")) {
+      fullscreen = true;
+      continue;
+    }
     if (!strcmp(argv[i], "--watch")) {
       if (++i == argc)
         client_fatal(
-            "Usage: crimson [game directory] [--watch <run id or replay URL>]");
+            "Usage: crimson [game directory] [--fullscreen] [--watch <run id or replay URL>]");
       const char *api = getenv("CRIMSON_LEADERBOARD_URL");
       linked_replay = LeaderboardNetwork::replay_link(
           argv[i], api ? api : "https://crimson.land/api");
@@ -701,7 +705,7 @@ SDL_AppResult SDL_AppInit(void **, int argc, char **argv) {
 #endif
     if (directory_given)
       client_fatal(
-          "Usage: crimson [game directory] [--watch <run id or replay URL>]");
+          "Usage: crimson [game directory] [--fullscreen] [--watch <run id or replay URL>]");
     game_directory = argv[i];
     directory_given = true;
   }
@@ -731,6 +735,9 @@ SDL_AppResult SDL_AppInit(void **, int argc, char **argv) {
   window = SDL_CreateWindow(title, 1024, 768, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   if (!window || !(context = SDL_GL_CreateContext(window)))
     client_fatal(SDL_GetError());
+  // Borderless desktop fullscreen; the renderer letterboxes the back buffer.
+  if (fullscreen)
+    SDL_SetWindowFullscreen(window, true);
   // Unattended captures run unthrottled: a hidden window would otherwise wait on vsync.
   SDL_GL_SetSwapInterval(unattended ? 0 : 1);
   SDL_HideCursor();
@@ -765,6 +772,12 @@ SDL_AppResult SDL_AppEvent(void *, SDL_Event *event) {
     break;
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
+    if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_RETURN &&
+        (event->key.mod & SDL_KMOD_ALT)) {
+      if (!event->key.repeat)
+        SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+      break;
+    }
     if (!event->key.repeat)
       key(event->key.scancode, event->type == SDL_EVENT_KEY_DOWN);
     break;
