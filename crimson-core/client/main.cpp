@@ -174,6 +174,15 @@ struct Scripted {
   std::string action;
 };
 std::vector<Scripted> script;
+// "button n 1|0" (the Dual Action indices pad() fills), "axis n v" (-1 to 1:
+// left X/Y, right X/Y) and "hat degrees|-1" script a pad, which then replaces
+// any real one for the rest of the run.
+struct {
+  bool active;
+  int axes[4];
+  unsigned char buttons[32];
+  unsigned hat = ~0u;
+} scripted_pad;
 bool script_loaded;
 float scripted_x = -1, scripted_y = -1;
 void run_script(int frame) {
@@ -203,6 +212,14 @@ void run_script(int frame) {
       scripted_y = b;
     } else if (!strcmp(verb, "press") || !strcmp(verb, "release")) {
       in->mouse_buttons[(int)a] = verb[0] == 'p' ? 0x80 : 0;
+    } else if (!strcmp(verb, "button") || !strcmp(verb, "axis") || !strcmp(verb, "hat")) {
+      scripted_pad.active = true;
+      if (verb[0] == 'b')
+        scripted_pad.buttons[(int)a & 31] = b ? 0x80 : 0;
+      else if (verb[0] == 'a')
+        scripted_pad.axes[(int)a & 3] = (int)lroundf(b * 1000);
+      else
+        scripted_pad.hat = a < 0 ? ~0u : (unsigned)lroundf(a * 100);
     } else if (!strcmp(verb, "key") || !strcmp(verb, "unkey")) {
       unsigned code = (unsigned)strtoul(s.action.c_str() + strlen(verb), nullptr, 16);
       in->keys[code & 255] = verb[0] == 'k' ? 0x80 : 0;
@@ -219,6 +236,12 @@ void pad(HostInput *in) {
   memset(in->pad_axes, 0, sizeof in->pad_axes);
   memset(in->pad_buttons, 0, sizeof in->pad_buttons);
   in->pad_hat = ~0u;
+  if (scripted_pad.active) {
+    memcpy(in->pad_axes, scripted_pad.axes, sizeof in->pad_axes);
+    memcpy(in->pad_buttons, scripted_pad.buttons, sizeof in->pad_buttons);
+    in->pad_hat = scripted_pad.hat;
+    return;
+  }
   if (!gamepad)
     return;
   static const SDL_GamepadAxis axes[] = {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX,
@@ -850,6 +873,11 @@ SDL_AppResult SDL_AppIterate(void *) {
       gy = scripted_y;
     }
     HostInput *in = input();
+    // The pad's menu modes (game/pad.cpp) tell a moved mouse from a cursor the stick moved.
+    static float last_gx = -1, last_gy = -1;
+    in->mouse_moved = last_gx >= 0 && (gx != last_gx || gy != last_gy);
+    last_gx = gx;
+    last_gy = gy;
     // The game moves its cursor by DirectInput motion: send what reaches the window cursor.
     in->mouse_dx = (int)lroundf(w2c_game_game_motion_x(&game, gx));
     in->mouse_dy = (int)lroundf(w2c_game_game_motion_y(&game, gy));

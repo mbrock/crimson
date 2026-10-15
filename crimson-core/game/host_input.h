@@ -19,6 +19,7 @@ struct HostInput {
   int pad_axes[4];
   unsigned pad_hat;
   unsigned char pad_buttons[32];
+  int mouse_moved; // the window cursor moved since the last frame, not just the game's cursor
 };
 static_assert(offsetof(HostInput, mouse_dx) == 256 && offsetof(HostInput, mouse_dy) == 260 &&
                   offsetof(HostInput, mouse_buttons) == 268 && offsetof(HostInput, key_event_count) == 276 &&

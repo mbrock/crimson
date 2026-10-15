@@ -1,15 +1,49 @@
-While the pad navigates the menus' focus (game/pad.cpp), the sticks stop steering the original's analog menu cursor,
-which would otherwise drift under the focus the stick moves; the Python port has no analog cursor. Moving the mouse
-returns to the original's.
+The pad's menu pointer (game/pad.cpp): the right stick steers the original's analog menu cursor, and the left stick,
+which the original added to it, moves the keyboard focus instead. The cursor answers the stick quadratically, fine near
+the centre and across the screen in about a second at full tilt, where the original's linear 540 units a second at the
+default sensitivity took five. Moving the mouse hands the cursor back to it, where the original kept the stick's until
+the next run. Only the mouse's own motion does: the client sends motion every frame to bring the game's cursor to the
+window's (client/main.cpp), which the original took for the mouse moving and so dropped the stick's cursor at once.
 --- a/decomp/1.9/crimsonland/game/game_frame_update.cpp
 +++ b/decomp/1.9/crimsonland/game/game_frame_update.cpp
 @@ -12,2 +12,3 @@
  extern "C" {
-+extern unsigned char game_pad_navigating;
++extern unsigned char game_pad_mouse_moved;
  extern player_state_t player_state_table[];
-@@ -330,3 +331,4 @@
+@@ -291,7 +292,8 @@
+     input_mouse_delta_nonzero =
+         grim_interface_ptr->grim_get_mouse_dx() != 0.0f
+         && grim_interface_ptr->grim_get_mouse_dy() != 0.0f;
+-    if (input_mouse_delta_nonzero) {
++    if (input_mouse_delta_nonzero
++        && (game_pad_mouse_moved || !ui_analog_cursor_active)) {
+         ui_mouse_blocked = 0;
+         ui_analog_cursor_active = 0;
+     }
+@@ -311,11 +313,2 @@
+ 
+-    analog_input.x = grim_interface_ptr->grim_get_config_float(
+-        player_state_table[0].input.axis_move_x);
+-    analog_input.y = grim_interface_ptr->grim_get_config_float(
+-        player_state_table[0].input.axis_move_y);
+-    if ((float)sqrt(
+-            analog_input.x * analog_input.x
+-            + analog_input.y * analog_input.y) > 0.2f) {
+-        cursor_delta += analog_input;
+-    }
+     if ((float)sqrt(
+@@ -326,8 +320,12 @@
+ 
+-    if (game_state_id == GAME_STATE_GAMEPLAY) {
++    if (game_state_id == GAME_STATE_GAMEPLAY || game_pad_mouse_moved) {
+         ui_analog_cursor_active = 0;
+     }
      if (game_state_id != GAME_STATE_GAMEPLAY
--        && ui_analog_cursor_active == 1) {
-+        && ui_analog_cursor_active == 1
-+        && !game_pad_navigating) {
-         float cursor_scale = config_blob.mouse_sensitivity * frame_dt;
+         && ui_analog_cursor_active == 1) {
+-        float cursor_scale = config_blob.mouse_sensitivity * frame_dt;
++        float tilt = (float)sqrt(
++            cursor_delta.x * cursor_delta.x
++            + cursor_delta.y * cursor_delta.y);
++        float cursor_scale =
++            config_blob.mouse_sensitivity * frame_dt * 4.0f * (tilt < 1.0f ? tilt : 1.0f);
+         ui_mouse_x += cursor_scale * cursor_delta.x * 540.0f;

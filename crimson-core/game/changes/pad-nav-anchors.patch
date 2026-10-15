@@ -1,0 +1,140 @@
+The pad's menu navigation (game/pad.cpp) moves the cursor between the places a click acts on. Each focusable
+widget names the centre of the rectangle its hover test uses, after its focus registration so the pad knows its focus
+slot (kind 0, or 1 for a slider, which takes left and right). An open dropdown's rows, the quest list's rows and its
+stage icons, which the original selects only by mouse or number keys, and the menus' clickable panels, name theirs
+too (kind 2, no focus slot).
+--- a/decomp/1.9/crimsonland/ui_elements/ui_element_update.cpp
++++ b/decomp/1.9/crimsonland/ui_elements/ui_element_update.cpp
+@@ -3,4 +3,6 @@
+ #include "crimsonland_gameplay.h"
+ #include "crimsonland_ui.h"
++
++extern "C" void game_nav_anchor(float x, float y, int kind);
+ 
+ struct ui_update_vec2_t {
+@@ -69,4 +71,10 @@
+     }
+ 
++    if (element->on_activate) {
++        game_nav_anchor(
++            (element->hover_min_x + element->hover_max_x) * 0.5f,
++            (element->hover_min_y + element->hover_max_y) * 0.5f,
++            2);
++    }
+     if (ui_mouse_x > element->hover_min_x
+         && ui_mouse_y > element->hover_min_y
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_button_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_button_update.cpp
+@@ -46,4 +46,5 @@
+ 
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ void ui_focus_set(int id, char reset_timer);
+@@ -82,4 +83,5 @@
+ 
+     xy[1] += 2.0f;
++    game_nav_anchor(xy[0] + width * 0.5f, xy[1] + 14.0f, 0);
+     button->hovered = ui_mouse_inside_rect(xy, 28, (int)width);
+     xy[1] -= 2.0f;
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_checkbox_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_checkbox_update.cpp
+@@ -17,4 +17,5 @@
+ 
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ bool input_primary_just_pressed(void);
+@@ -27,4 +28,10 @@
+     bool activated = false;
+     bool focused = ui_focus_update((int)checkbox);
++    game_nav_anchor(
++        xy[0] + (checkbox->label
++            ? (grim_interface_ptr->grim_measure_text_width(checkbox->label) + 22) * 0.5f
++            : 8.0f),
++        xy[1] + 8.0f,
++        0);
+     char *label = checkbox->label;
+     checkbox->hovered = 0;
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_menu_item_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_menu_item_update.cpp
+@@ -40,4 +40,5 @@
+ extern "C" {
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ void ui_focus_set(int id, char reset_timer);
+@@ -68,4 +69,5 @@
+     }
+ 
++    game_nav_anchor(xy[0] + width * 0.5f, xy[1] + 8.0f, 0);
+     item->hovered = ui_mouse_inside_rect(xy, 16, (int)width);
+     if (item->hovered) {
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_segmented_slider_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_segmented_slider_update.cpp
+@@ -33,4 +33,5 @@
+ extern "C" {
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ void ui_focus_set(int id, char reset_timer);
+@@ -53,4 +54,5 @@
+     {
+         ui_slider_vec2_t position(xy->x - 3.0f, xy->y - 1.0f);
++        game_nav_anchor(xy->x + slider_width * 0.5f, xy->y + 8.0f, 1);
+ 
+         if (ui_mouse_inside_rect(
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_text_input_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_text_input_update.cpp
+@@ -40,4 +40,5 @@
+ extern "C" {
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ void ui_focus_set(int id, char reset_timer);
+@@ -60,4 +61,5 @@
+     bool focused = ui_focus_update((int)id);
+     float width = (float)id->width_px;
++    game_nav_anchor(xy[0] + width * 0.5f, xy[1] + 9.0f, 0);
+ 
+     if (ui_mouse_inside_rect(xy, 18, (int)width)) {
+--- a/decomp/1.9/crimsonland/ui_widgets/ui_list_widget_update.cpp
++++ b/decomp/1.9/crimsonland/ui_widgets/ui_list_widget_update.cpp
+@@ -51,4 +51,5 @@
+ extern "C" {
+ bool ui_focus_update(int id);
++void game_nav_anchor(float x, float y, int kind);
+ void ui_focus_draw(float *xy);
+ }
+@@ -86,4 +87,5 @@
+     }
+ 
++    game_nav_anchor(xy->x + width * 0.5f, xy->y + 7.0f, 0);
+     if (list->hovered) {
+         ui_focus_set((int)list, 0);
+@@ -178,4 +180,5 @@
+             *xy + list_vec2_t(
+                 0.0f, (float)(row_index * 16 + 16));
++        game_nav_anchor(row_position.x + width * 0.5f, row_position.y + 7.0f, 2);
+         if ((unsigned char)ui_mouse_inside_rect_with_padding(
+                 (float *)&row_position, 14, (int)width)) {
+--- a/decomp/1.9/crimsonland/menus/quest_select_menu_update.cpp
++++ b/decomp/1.9/crimsonland/menus/quest_select_menu_update.cpp
+@@ -114,4 +114,5 @@
+ bool ui_checkbox_update(float *xy, ui_checkbox_t *checkbox);
+ bool ui_button_update(float *xy, ui_button_t *button);
++void game_nav_anchor(float x, float y, int kind);
+ void sfx_play(int sfx_id, float gain);
+ void music_fade_out_all(int sfx_id);
+@@ -193,4 +194,5 @@
+     float icon_y = position.y + 3.0f;
+     for (stage = 1; stage < 6; stage++) {
++        game_nav_anchor(position.x + 16.0f, position.y + 16.0f, 2);
+         if (ui_mouse_x <= position.x
+             || ui_mouse_y <= position.y
+@@ -263,4 +265,5 @@
+     float hover_left = position.x - 10.0f;
+     do {
++        game_nav_anchor(position.x + 40.0f, position.y + 8.0f, 2);
+         if (ui_mouse_x <= hover_left
+             || position.y - 2.0f >= ui_mouse_y

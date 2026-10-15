@@ -16,13 +16,6 @@ extern int controls_rebind_slot_index;
 extern int ui_focus_index, ui_focus_timer_ms, frame_dt_ms;
 }
 
-// Once the pad navigates, the focus marker and the focused button's highlight
-// stay up instead of fading a second after each move, and the sticks stop
-// steering the menus' analog cursor (changes/pad-menu-cursor.patch), as in the
-// Python port's focus.py; moving the mouse returns to the original's.
-extern "C" unsigned char game_pad_navigating;
-unsigned char game_pad_navigating;
-
 namespace {
 
 // The stock crimson.cfg bindings are the DirectInput-era defaults
@@ -103,116 +96,207 @@ extern "C" void game_pad_profile() {
   config_sync_from_grim();
 }
 
-// The original's menus take no pad, only the mouse and keyboard focus: Tab and
-// Shift+Tab move it, Enter activates (ui_focus_update, ui_button_update), the
-// arrows page quest tiers and step sliders, PageUp/PageDown scroll, and Escape
-// backs out. Outside a run the pad presses those keys as Python's focus.py
-// does: the D-pad or left stick moves, A accepts, B and Start go back, LB/RB
-// page. A, B, Start and the stick tap once rather than hold, so a held button
-// never auto-repeats into the next screen; the stick repeats on its own clock,
-// as Python's does. In a run only Start presses Escape, to pause. Nothing is
-// pressed while the Controls menu waits for a binding, which would otherwise
-// capture the key the pad pressed instead of the pad's own button.
+// The original's menus are made for the mouse, with a keyboard focus (Tab,
+// Enter) that reaches only some of them: the quest list, for one, takes only a
+// click or a number key, so Enter on its one focusable widget, Back, backed out.
+// The pad therefore drives the cursor. The D-pad or left stick moves it to the
+// nearest place a click acts on in that direction (the anchors the widgets name,
+// changes/pad-nav-anchors.patch) and keeps it there as the menu moves; the right
+// stick steers it freely (changes/pad-menu-cursor.patch); A clicks where it is.
+// A focused slider takes left and right, and left and right with nothing that way
+// press the arrows, which page the quest stages. B and Start back out (Escape),
+// LB/RB page (PageUp/PageDown). The directions press once, then repeat after
+// 400 ms every 120 ms, as Python's focus.py does. In a run only Start presses
+// Escape, to pause. While the Controls menu waits for a binding only Escape is
+// pressed, to cancel; the capture never takes it, but would take any other key
+// the pad pressed instead of the pad's own button.
+extern "C" {
+extern float ui_mouse_x, ui_mouse_y;
+extern int ui_analog_cursor_active, ui_focus_count;
+// The window cursor moved this frame (client/main.cpp), which hands the cursor
+// back to the mouse (changes/pad-menu-cursor.patch).
+extern unsigned char game_pad_mouse_moved;
+unsigned char game_pad_mouse_moved;
+}
+
+namespace {
+
+struct Anchor {
+  float x, y;
+  int kind, slot; // kind 0 a focusable widget, 1 a slider, 2 a click target without focus
+};
+Anchor anchors[2][96];
+int anchor_count[2], current; // anchors[current] collects this frame's; the other holds the last frame's
+
+} // namespace
+
+extern "C" void game_nav_anchor(float x, float y, int kind) {
+  if (anchor_count[current] < 96)
+    anchors[current][anchor_count[current]++] = {x, y, kind, kind < 2 ? ui_focus_count - 1 : -1};
+}
+
 extern "C" void game_pad_menu() {
-  enum { up, down, left, right, accept, back, page_up, page_down, count };
-  static const unsigned char codes[count] = {0x0f, 0x0f, 0xcb, 0xcd, 0x1c, 0x01, 0xc9, 0xd1};
-  static bool held[count], was[count];
-  static int stick, stick_repeat_ms, last_state = -1;
+  enum { up, down, left, right };
+  static const float dx[] = {0, 0, -1, 1}, dy[] = {-1, 1, 0, 0};
+  static int direction_held = -1, repeat_ms, glued = -1, glued_count, last_state = -1;
+  static bool was_accept, was_back, clicking, paging[2];
   HostInput &in = *game_input();
+  current ^= 1;
+  anchor_count[current] = 0;
+  const Anchor *nav = anchors[current ^ 1];
+  int nav_count = anchor_count[current ^ 1];
   bool run = game_state_id == GAME_STATE_GAMEPLAY || game_state_id == GAME_STATE_TYPO_GAMEPLAY ||
              game_state_id == GAME_STATE_DEMO_UPSELL_GAMEPLAY;
   bool locked = controls_rebind_slot_index != -1;
-  bool now[count] = {};
-  unsigned hat = in.pad_hat;
-  if (hat != ~0u) {
-    now[up] = hat > 31500 || hat < 4500;
-    now[right] = hat > 4500 && hat < 13500;
-    now[down] = hat > 13500 && hat < 22500;
-    now[left] = hat > 22500 && hat < 31500;
-  }
-  now[accept] = in.pad_buttons[1];
-  now[back] = in.pad_buttons[2] || in.pad_buttons[9];
-  now[page_up] = in.pad_buttons[4];
-  now[page_down] = in.pad_buttons[5];
-  // The left stick as a D-pad past half travel: a press, then repeats after
-  // 400 ms every 120 ms. In a run it moves the player, and only its direction
-  // is tracked, so a push held over from the run steps no sooner than a repeat.
-  int x = in.pad_axes[0], y = in.pad_axes[1], direction = -1;
-  if ((x > 500 || x < -500 || y > 500 || y < -500))
-    direction = (y < 0 ? -y : y) >= (x < 0 ? -x : x) ? (y > 0 ? down : up) : (x > 0 ? right : left);
-  int stick_press = -1;
-  if (run || locked || direction != stick) {
-    if (!run && !locked && direction != stick)
-      stick_press = direction;
-    stick = direction;
-    stick_repeat_ms = 400;
-  } else if (direction >= 0 && (stick_repeat_ms -= frame_dt_ms) <= 0) {
-    stick_press = direction;
-    stick_repeat_ms = 120;
-  }
-  bool want[count] = {};
-  if (!locked) {
-    for (int i = 0; i < count; ++i)
-      want[i] = !run && now[i];
-    if (run)
-      want[back] = in.pad_buttons[9];
-    // Taps: down on the press, up the next frame.
-    want[accept] = want[accept] && !was[accept];
-    want[back] = want[back] && !was[back];
-  }
-  bool navigated = false;
-  for (int i = 0; i < count; ++i)
-    navigated |= !run && !locked && now[i] && !was[i];
-  for (int i = 0; i < count; ++i)
-    was[i] = i == back && run ? in.pad_buttons[9] : now[i];
+  bool menu = !run && !locked;
+  game_pad_mouse_moved = in.mouse_moved;
   auto press = [&](unsigned char code, bool down) {
     in.keys[code] = down ? 0x80 : 0;
     if (in.key_event_count < 32)
       in.key_events[in.key_event_count++] = {code, (unsigned char)down};
   };
-  // A stick step taps its key, released next frame, unless the D-pad holds it.
-  static bool stick_tapped[count];
-  for (int i = up; i <= right; ++i) {
-    if (stick_tapped[i] && !want[i] && held[i]) {
-      press(codes[i], false);
-      if (i == up)
-        press(0x2a, false);
-      held[i] = false;
+  // Release last frame's taps.
+  static unsigned char tapped[4];
+  for (unsigned char &code : tapped)
+    if (code) {
+      press(code, false);
+      code = 0;
     }
-    stick_tapped[i] = false;
-  }
-  if (stick_press >= 0 && !held[stick_press]) {
-    if (stick_press == up)
-      press(0x2a, true);
-    press(codes[stick_press], true);
-    held[stick_press] = stick_tapped[stick_press] = true;
-    navigated = true;
-  }
-  for (int i = 0; i < count; ++i) {
-    if (want[i] == held[i] || stick_tapped[i])
-      continue;
-    held[i] = want[i];
-    if (i == up && want[i])
-      press(0x2a, true); // Shift+Tab
-    press(codes[i], want[i]);
-    if (i == up && !want[i])
-      press(0x2a, false);
-    // WM_CHAR delivers Enter too, which name entry reads.
-    if (i == accept && want[i])
-      game_key_char(13);
+  auto tap_once = [&](unsigned char code) {
+    press(code, true);
+    for (unsigned char &slot : tapped)
+      if (!slot) {
+        slot = code;
+        break;
+      }
+  };
+  if (clicking) {
+    in.mouse_buttons[0] = 0;
+    clicking = false;
   }
 
-  if (navigated)
-    game_pad_navigating = 1;
-  else if (in.mouse_dx || in.mouse_dy)
-    game_pad_navigating = 0;
-  // A newly shown screen starts on its first widget, not on the previous
-  // screen's focus index (Python's UiFocus.screen_changed).
-  if (game_state_id != last_state) {
-    last_state = game_state_id;
-    ui_focus_index = 0;
+  // The held direction: the D-pad, else the left stick past half travel.
+  int direction = -1;
+  unsigned hat = in.pad_hat;
+  if (hat != ~0u)
+    direction = hat > 31500 || hat < 4500 ? up : hat < 13500 ? right : hat < 22500 ? down : left;
+  else {
+    int x = in.pad_axes[0], y = in.pad_axes[1];
+    if (x > 500 || x < -500 || y > 500 || y < -500)
+      direction = (y < 0 ? -y : y) >= (x < 0 ? -x : x) ? (y > 0 ? down : up) : (x > 0 ? right : left);
   }
-  // ui_focus_update takes a frame's time off before it draws.
-  if (game_pad_navigating && !run)
-    ui_focus_timer_ms = 1000 + frame_dt_ms;
+  int step = -1;
+  if (!menu || direction != direction_held) {
+    // In a run only the direction is tracked, so a push held over from it steps no sooner than a repeat.
+    if (menu)
+      step = direction;
+    direction_held = direction;
+    repeat_ms = 400;
+  } else if (direction >= 0 && (repeat_ms -= frame_dt_ms) <= 0) {
+    step = direction;
+    repeat_ms = 120;
+  }
+
+  // The cursor leaves its anchor once the right stick or the mouse moves it, or
+  // the screen changes. When the anchors change on the same screen (a dropdown
+  // opens), it keeps to the one nearest where it was.
+  static bool pad_mode;
+  static int stable_frames, last_count;
+  static float glued_x, glued_y;
+  bool pointing = menu && in.pad_axes[2] * in.pad_axes[2] + in.pad_axes[3] * in.pad_axes[3] > 200 * 200;
+  if (pointing || in.mouse_moved)
+    pad_mode = false;
+  if (pointing || in.mouse_moved || !menu || game_state_id != last_state)
+    glued = -1;
+  if (glued >= 0 && nav_count != glued_count) {
+    float nearest = 40.0f * 40.0f;
+    glued = -1;
+    for (int i = 0; i < nav_count; ++i) {
+      float ox = nav[i].x - glued_x, oy = nav[i].y - glued_y;
+      if (ox * ox + oy * oy < nearest) {
+        nearest = ox * ox + oy * oy;
+        glued = i;
+      }
+    }
+    glued_count = nav_count;
+  }
+  last_state = game_state_id;
+  stable_frames = nav_count == last_count ? stable_frames + 1 : 0;
+  last_count = nav_count;
+  // A screen the pad came to starts on its topmost place, once its anchors settle.
+  if (menu && pad_mode && glued < 0 && step < 0 && nav_count > 0 && stable_frames >= 10) {
+    int top = 0;
+    for (int i = 1; i < nav_count; ++i)
+      if (nav[i].y < nav[top].y - 2.0f || (nav[i].y < nav[top].y + 2.0f && nav[i].x < nav[top].x))
+        top = i;
+    glued = top;
+    glued_count = nav_count;
+  }
+
+  if (step >= 0) {
+    const Anchor *at = glued >= 0 ? &nav[glued] : nullptr;
+    if (at && at->kind == 1 && (step == left || step == right)) {
+      tap_once(step == left ? 0xcb : 0xcd);
+    } else {
+      // From the anchor the cursor holds, else from the cursor: the nearest
+      // anchor that way, weighing sideways distance half, so a row's widget is
+      // reached however far it sits from the one above. Left and right look only
+      // within 56 degrees, and with nothing there press the arrows instead.
+      float from_x = at ? at->x : ui_mouse_x, from_y = at ? at->y : ui_mouse_y;
+      bool vertical = step == up || step == down;
+      int target = -1;
+      float best = 1e30f;
+      for (int i = 0; i < nav_count; ++i) {
+        float ox = nav[i].x - from_x, oy = nav[i].y - from_y;
+        float along = ox * dx[step] + oy * dy[step], across = ox * dy[step] - oy * dx[step];
+        if (across < 0)
+          across = -across;
+        if (along <= 4.0f || (!vertical && across > along * 1.5f))
+          continue;
+        float score = along + across * 0.5f;
+        if (score < best) {
+          best = score;
+          target = i;
+        }
+      }
+      if (target >= 0) {
+        glued = target;
+        glued_count = nav_count;
+      } else if (step == left || step == right) {
+        tap_once(step == left ? 0xcb : 0xcd);
+      }
+    }
+  }
+  if (step >= 0)
+    pad_mode = true;
+  if (glued >= 0) {
+    glued_x = nav[glued].x;
+    glued_y = nav[glued].y;
+    // Hold the cursor on its anchor; the mouse's motion no longer reaches it until the mouse moves.
+    ui_mouse_x = nav[glued].x;
+    ui_mouse_y = nav[glued].y;
+    ui_analog_cursor_active = 1;
+    if (nav[glued].slot >= 0) {
+      ui_focus_index = nav[glued].slot;
+      ui_focus_timer_ms = 1000 + frame_dt_ms; // ui_focus_update takes a frame's time off before it draws
+    }
+  }
+
+  bool accept = in.pad_buttons[1], back = in.pad_buttons[2] || in.pad_buttons[9], start = in.pad_buttons[9];
+  if (menu && accept && !was_accept) {
+    pad_mode = true;
+    in.mouse_buttons[0] = 0x80;
+    clicking = true;
+  }
+  if ((run ? start : back) && !was_back) // Escape also cancels a rebind, which never captures it
+    tap_once(0x01);
+  was_accept = accept;
+  was_back = run ? start : back;
+  for (int i = 0; i < 2; ++i) {
+    bool want = menu && in.pad_buttons[4 + i];
+    if (want != paging[i]) {
+      press(i ? 0xd1 : 0xc9, want);
+      paging[i] = want;
+    }
+  }
 }
